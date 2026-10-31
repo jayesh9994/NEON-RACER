@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Racer</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#050816;color:#fff;font-family:Arial,sans-serif;overflow:hidden}
+#game{height:100dvh;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(circle at center,#101d38,#03050d)}
+#hud{width:min(100%,600px);display:flex;justify-content:space-around;align-items:center;padding:10px;background:#081329;border-bottom:1px solid #00eaff}
+.stat{text-align:center}
+.stat small{display:block;color:#8ca6c9;font-size:11px;letter-spacing:1px}
+.stat strong{font-size:20px;color:#00f5ff;text-shadow:0 0 10px #00eaff}
+#stage{position:relative;width:min(100vw,calc((100dvh - 130px)*.789));height:min(calc(100dvh - 130px),calc(100vw*1.267));max-height:760px;overflow:hidden;border:2px solid #00eaff;box-shadow:0 0 25px #00eaff55}
+canvas{display:block;width:100%;height:100%}
+#overlay{position:absolute;inset:0;background:#030817dd;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:3}
+#overlay h1{font-size:clamp(32px,8vw,58px);color:#00f5ff;text-shadow:0 0 20px #00eaff;margin:0 0 10px}
+#overlay p{color:#c6d7f4;line-height:1.7;padding:0 15px}
+button{border:1px solid #00eaff;background:#061b32;color:#00f5ff;padding:13px 30px;font-size:17px;font-weight:bold;cursor:pointer;box-shadow:0 0 15px #00eaff66;border-radius:8px}
+button:active{transform:scale(.96)}
+#controls{width:min(100%,600px);display:flex;justify-content:space-between;padding:10px 18px;gap:12px}
+.control-group{display:flex;gap:10px}
+.ctrl{width:65px;height:48px;padding:0;font-size:20px;touch-action:none}
+#hint{font-size:11px;color:#7892b5;text-align:center;padding-bottom:5px}
+@media(min-width:800px){#controls{padding:8px 20px}.ctrl{width:75px;height:42px}}
+</style>
+</head>
+<body>
+<div id="game">
+ <div id="hud">
+  <div class="stat"><small>SCORE</small><strong id="score">0</strong></div>
+  <div class="stat"><small>SPEED</small><strong><span id="speed">0</span> KM/H</strong></div>
+  <div class="stat"><small>BEST</small><strong id="best">0</strong></div>
+ </div>
+ <div id="stage">
+  <canvas id="canvas" width="600" height="760"></canvas>
+  <div id="overlay">
+   <h1>NEON RACER</h1>
+   <p>Race through traffic. Avoid collisions.<br>
+   W / ↑ Accelerate &nbsp; S / ↓ Brake<br>
+   A / ← Left &nbsp; D / → Right</p>
+   <button id="start">START RACE</button>
+  </div>
+ </div>
+ <div id="controls">
+  <div class="control-group">
+   <button class="ctrl" id="left">◀</button>
+   <button class="ctrl" id="right">▶</button>
+  </div>
+  <div class="control-group">
+   <button class="ctrl" id="brake">▼</button>
+   <button class="ctrl" id="accelerate">▲</button>
+  </div>
+ </div>
+ <div id="hint">USE KEYBOARD OR ON-SCREEN CONTROLS</div>
+</div>
+<script>
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+const W=600,H=760;
+const lanes=[165,255,345,435];
+let running=false,gameOver=false;
+let speed=0,score=0,distance=0;
+let best=Number(localStorage.getItem("neonRacerBest")||0);
+let roadOffset=0,spawnTimer=0,lastTime=0;
+let traffic=[];
+let keys={};
+let player={x:300,y:625,w:48,h:88};
+let touch={left:false,right:false,accelerate:false,brake:false};
+document.getElementById("best").textContent=best;
+
+function drawRoad(dt){
+ ctx.fillStyle="#071323";ctx.fillRect(0,0,W,H);
+ ctx.fillStyle="#102b35";ctx.fillRect(70,0,460,H);
+ ctx.fillStyle="#00d9e8";ctx.fillRect(66,0,4,H);ctx.fillRect(530,0,4,H);
+ roadOffset=(roadOffset+speed*dt*.65)%80;
+ ctx.strokeStyle="#54748b";ctx.lineWidth=4;ctx.setLineDash([35,35]);
+ for(let x=210;x<=390;x+=90){
+  ctx.beginPath();ctx.moveTo(x,-80+roadOffset);ctx.lineTo(x,H);ctx.stroke();
+ }
+ ctx.setLineDash([]);
+ ctx.fillStyle="#071323";
+ ctx.fillRect(0,0,66,H);ctx.fillRect(534,0,66,H);
+ for(let y=-40+(roadOffset%80);y<H;y+=80){
+  ctx.fillStyle="#00f5ff";ctx.fillRect(28,y,8,35);
+  ctx.fillStyle="#ff2bd6";ctx.fillRect(564,y+30,8,35);
+ }
+}
+
+function roundedRect(x,y,w,h,r,color){
+ ctx.fillStyle=color;ctx.beginPath();
+ ctx.roundRect(x,y,w,h,r);ctx.fill();
+}
+function drawCar(x,y,w,h,color,isPlayer=false){
+ ctx.save();ctx.translate(x,y);
+ ctx.shadowBlur=isPlayer?22:10;
+ ctx.shadowColor=color;
+ roundedRect(-w/2,-h/2,w,h,10,color);
+ ctx.shadowBlur=0;
+ roundedRect(-w*.34,-h*.29,w*.68,h*.35,"7");
+ ctx.fillStyle="#10263a";
+ ctx.beginPath();
+ ctx.moveTo(-w*.29,-h*.25);ctx.lineTo(w*.29,-h*.25);
+ ctx.lineTo(w*.24,-h*.02);ctx.lineTo(-w*.24,-h*.02);ctx.closePath();ctx.fill();
+ roundedRect(-w*.31,h*.12,w*.62,h*.22,5,"#122e43");
+ ctx.fillStyle="#fff4a0";
+ ctx.fillRect(-w*.37,-h*.43,w*.2,6);
+ ctx.fillRect(w*.17,-h*.43,w*.2,6);
+ ctx.fillStyle="#ff294f";
+ ctx.fillRect(-w*.37,h*.37,w*.2,6);
+ ctx.fillRect(w*.17,h*.37,w*.2,6);
+ ctx.fillStyle="#090d16";
+ ctx.fillRect(-w*.57,-h*.28,w*.13,h*.23);
+ ctx.fillRect(w*.44,-h*.28,w*.13,h*.23);
+ ctx.fillRect(-w*.57,h*.15,w*.13,h*.23);
+ ctx.fillRect(w*.44,h*.15,w*.13,h*.23);
+ ctx.restore();
+}
+
+function spawnTraffic(){
+ const lane=lanes[Math.floor(Math.random()*lanes.length)];
+ const colors=["#ff315b","#ff9f1c","#a855f7","#e5e7eb","#19d3ff","#7cff6b"];
+ traffic.push({
+  x:lane,y:-100,w:46,h:84,
+  color:colors[Math.floor(Math.random()*colors.length)],
+  target:lane,
+  changeTimer:1+Math.random()*3,
+  moveSpeed:Math.random()*35+10
+ });
+}
+
+function updateTraffic(dt){
+ const difficulty=Math.min(1.8,score/1500);
+ spawnTimer-=dt;
+ if(spawnTimer<=0){
+  spawnTraffic();
+  spawnTimer=Math.max(.38,1.15-difficulty*.35);
+ }
+ for(let i=traffic.length-1;i>=0;i--){
+  const c=traffic[i];
+  c.y+=(100+speed*.8)*dt;
+  c.changeTimer-=dt;
+  if(c.changeTimer<=0){
+   c.target=lanes[Math.floor(Math.random()*lanes.length)];
+   c.changeTimer=1.1+Math.random()*2.4;
+  }
+  c.x+=(c.target-c.x)*Math.min(1,dt*1.5);
+  c.x+=Math.sin(Date.now()/500+i)*c.moveSpeed*dt*.15;
+  if(c.y>H+100)traffic.splice(i,1);
+ }
+}
+
+function collision(a,b){
+ const ax=a.x-a.w*.43,ay=a.y-a.h*.43;
+ const bx=b.x-b.w*.43,by=b.y-b.h*.43;
+ return ax<bx+b.w*.86&&ax+a.w*.86>bx&&ay<by+b.h*.86&&ay+a.h*.86>by;
+}
+
+function update(dt){
+ if(!running)return;
+ const accelerating=keys.ArrowUp||keys.w||touch.accelerate;
+ const braking=keys.ArrowDown||keys.s||touch.brake;
+ const left=keys.ArrowLeft||keys.a||touch.left;
+ const right=keys.ArrowRight||keys.d||touch.right;
+ if(accelerating)speed=Math.min(300,speed+55*dt);
+ else speed=Math.max(0,speed-25*dt);
+ if(braking)speed=Math.max(0,speed-105*dt);
+ if(left)player.x-=260*dt;
+ if(right)player.x+=260*dt;
+ player.x=Math.max(105,Math.min(495,player.x));
+ distance+=speed*dt*.12;
+ score=Math.floor(distance);
+ updateTraffic(dt);
+ for(const c of traffic){
+  if(collision(player,c)){endGame();break;}
+ }
+ document.getElementById("score").textContent=score;
+ document.getElementById("speed").textContent=Math.round(speed);
+}
+
+function render(){
+ drawRoad(0);
+ for(const c of traffic)drawCar(c.x,c.y,c.w,c.h,c.color);
+ drawCar(player.x,player.y,player.w,player.h,"#00eaff",true);
+}
+
+function loop(time){
+ const dt=Math.min((time-lastTime)/1000||0,.04);
+ lastTime=time;
+ update(dt);
+ render();
+ requestAnimationFrame(loop);
+}
+
+function startGame(){
+ traffic=[];speed=0;score=0;distance=0;spawnTimer=.8;
+ player.x=300;running=true;gameOver=false;
+ document.getElementById("overlay").style.display="none";
+ document.getElementById("score").textContent="0";
+ document.getElementById("speed").textContent="0";
+}
+function endGame(){
+ running=false;gameOver=true;
+ best=Math.max(best,score);
+ localStorage.setItem("neonRacerBest",best);
+ document.getElementById("best").textContent=best;
+ document.querySelector("#overlay h1").textContent="RACE OVER";
+ document.querySelector("#overlay p").innerHTML=
+ "YOUR SCORE: "+score+"<br>BEST SCORE: "+best+"<br>Try again and beat your record!";
+ document.getElementById("start").textContent="RESTART RACE";
+ document.getElementById("overlay").style.display="flex";
+}
+
+document.getElementById("start").addEventListener("click",()=>{
+ document.querySelector("#overlay h1").textContent="NEON RACER";
+ document.querySelector("#overlay p").innerHTML=
+ "Race through traffic. Avoid collisions.<br>W / ↑ Accelerate &nbsp; S / ↓ Brake<br>A / ← Left &nbsp; D / → Right";
+ startGame();
+});
+
+window.addEventListener("keydown",e=>{
+ const k=e.key.toLowerCase();
+ if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k))e.preventDefault();
+ keys[k]=true;
+});
+window.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+window.addEventListener("blur",()=>{keys={};touch={left:false,right:false,accelerate:false,brake:false};});
+
+function bindButton(id,key){
+ const el=document.getElementById(id);
+ const down=e=>{e.preventDefault();touch[key]=true;};
+ const up=e=>{e.preventDefault();touch[key]=false;};
+ el.addEventListener("pointerdown",down);
+ el.addEventListener("pointerup",up);
+ el.addEventListener("pointerleave",up);
+ el.addEventListener("pointercancel",up);
+}
+bindButton("left","left");
+bindButton("right","right");
+bindButton("accelerate","accelerate");
+bindButton("brake","brake");
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
